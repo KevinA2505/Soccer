@@ -169,16 +169,38 @@ const App: React.FC = () => {
         const nextPlayers = prev.players.map(p => {
           let target = { ...p.anchor };
           const isAttacking = owner?.side === p.side;
+          const isHolder = p.hasBall;
           const isChaser = !owner && (
             p.id === [...prev.players].sort((a,b) => 
               Math.sqrt((a.position.x-ballPos.x)**2 + (a.position.y-ballPos.y)**2) - 
               Math.sqrt((b.position.x-ballPos.x)**2 + (b.position.y-ballPos.y)**2))[0].id
           );
 
-          if (p.hasBall) return p;
-
-          // 1. Lógica de Portero (Achique)
-          if (p.role === PlayerRole.GK) {
+          // 1. Lógica para poseedor: conducción hacia zona libre/portería
+          if (isHolder) {
+            const opponentGoalX = p.side === TeamSide.HOME ? 120 : 0;
+            const toGoal = { x: opponentGoalX - p.position.x, y: 40 - p.position.y };
+            const nearestOpp = prev.players
+              .filter(o => o.side !== p.side)
+              .sort((a,b) => Math.sqrt((a.position.x-p.position.x)**2 + (a.position.y-p.position.y)**2) - 
+                            Math.sqrt((b.position.x-p.position.x)**2 + (b.position.y-p.position.y)**2))[0];
+            const awayFromNearest = nearestOpp ? { x: p.position.x - nearestOpp.position.x, y: p.position.y - nearestOpp.position.y } : { x: 0, y: 0 };
+            const norm = (v: Position) => {
+              const len = Math.sqrt(v.x*v.x + v.y*v.y) || 1;
+              return { x: v.x/len, y: v.y/len };
+            };
+            const desiredDir = { 
+              x: norm(toGoal).x * 0.8 + norm(awayFromNearest).x * 0.4, 
+              y: norm(toGoal).y * 0.8 + norm(awayFromNearest).y * 0.4 
+            };
+            const dirNorm = norm(desiredDir);
+            target = { 
+              x: p.position.x + dirNorm.x * 12, 
+              y: p.position.y + dirNorm.y * 12 
+            };
+          }
+          // 2. Lógica de Portero (Achique)
+          else if (p.role === PlayerRole.GK) {
             const goalX = p.side === TeamSide.HOME ? 0 : 120;
             const distBallGoal = Math.abs(ballPos.x - goalX);
             if (distBallGoal < 30) {
@@ -186,11 +208,11 @@ const App: React.FC = () => {
               target.y = ballPos.y * 0.3 + 40 * 0.7; // Se posiciona ligeramente hacia el balón
             }
           } 
-          // 2. Lógica de Persecución
+          // 3. Lógica de Persecución
           else if (isChaser) {
             target = { ...ballPos };
           } 
-          // 3. Lógica Defensiva (Marcaje)
+          // 4. Lógica Defensiva (Marcaje)
           else if (!isAttacking) {
             const nearestOpp = prev.players
               .filter(o => o.side !== p.side)
@@ -203,14 +225,17 @@ const App: React.FC = () => {
               target.y = nearestOpp.position.y * 0.7 + 40 * 0.3;
             }
           } 
-          // 4. Lógica Ofensiva (Desmarques)
+          // 5. Lógica Ofensiva (Desmarques)
           else {
             const forwardDir = p.side === TeamSide.HOME ? 1 : -1;
             target.x = p.anchor.x + (ballPos.x - 60) * 0.5 + (forwardDir * 15);
             target.y = p.anchor.y + (ballPos.y - 40) * 0.3;
           }
 
-          let speed = (p.stats.speed / 100) * (isChaser ? 1.2 : 0.9);
+          const baseSpeed = (p.stats.speed / 100) * (isChaser ? 1.2 : 0.9);
+          const holderFactor = isHolder ? 0.85 : 1;
+          const cooldownFactor = p.actionCooldown > 0 ? 0.7 : 1;
+          const speed = baseSpeed * holderFactor * cooldownFactor;
           const dx = target.x - p.position.x, dy = target.y - p.position.y;
           const d = Math.sqrt(dx*dx + dy*dy) || 1;
 
@@ -221,7 +246,7 @@ const App: React.FC = () => {
               y: Math.max(2, Math.min(78, p.position.y + (dy/d)*speed)) 
             },
             actionCooldown: Math.max(0, p.actionCooldown - 1),
-            stamina: Math.max(10, p.stamina - (isChaser ? 0.05 : 0.01))
+            stamina: Math.max(10, p.stamina - (isChaser ? 0.05 : isHolder ? 0.02 : 0.01))
           };
         });
 
