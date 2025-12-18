@@ -1,29 +1,17 @@
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { 
-  MatchState, MatchPhase, TeamSide, PlayerRole, 
-  Player, Position, Ball, TeamStrategy 
+import {
+  MatchState, MatchPhase, TeamSide, PlayerRole,
+  Player, Position, Ball, TeamStrategy
 } from './types';
-import { 
-  PITCH_WIDTH, PITCH_HEIGHT, 
+import {
+  PITCH_WIDTH, PITCH_HEIGHT,
   HOME_FORMATION_BASE, AWAY_FORMATION_BASE,
   CENTER_POINT, PLAYER_RADIUS
 } from './constants';
 import Pitch from './components/Pitch';
 import { calculateProbability, getAIDecision } from './engine/MatchLogic';
-import { getMatchCommentary } from './services/geminiService';
-
-declare global {
-  interface AIStudio {
-    hasSelectedApiKey: () => Promise<boolean>;
-    openSelectKey: () => Promise<void>;
-  }
-
-  interface Window {
-    // Removed readonly to fix: All declarations of 'aistudio' must have identical modifiers
-    aistudio: AIStudio;
-  }
-}
+import { getMatchCommentary } from './services/commentaryService';
 
 const createPlayers = (startingSide: TeamSide, isKickoff: boolean = false): Player[] => {
   const players: Player[] = [];
@@ -79,31 +67,11 @@ const App: React.FC = () => {
   const [commentary, setCommentary] = useState("¡Bienvenidos al Tactical Soccer Pro!");
   const [chargingPower, setChargingPower] = useState(0);
   const [activeGadget, setActiveGadget] = useState<string | null>(null);
-  const [hasApiKey, setHasApiKey] = useState<boolean>(true);
   const chargeRef = useRef<number>(0);
   const chargeInterval = useRef<any>(null);
   const pendingAction = useRef<{pos: Position, player?: Player} | null>(null);
   const lastAiCallRef = useRef<number>(0);
-  const AI_COOLDOWN = 12000; 
-
-  // Check for API key on mount to comply with Gemini 3 usage guidelines
-  useEffect(() => {
-    const checkKey = async () => {
-      if (window.aistudio && typeof window.aistudio.hasSelectedApiKey === 'function') {
-        const selected = await window.aistudio.hasSelectedApiKey();
-        setHasApiKey(selected);
-      }
-    };
-    checkKey();
-  }, []);
-
-  const handleSelectKey = async () => {
-    if (window.aistudio && typeof window.aistudio.openSelectKey === 'function') {
-      await window.aistudio.openSelectKey();
-      // Assume success as per instructions to avoid race conditions
-      setHasApiKey(true);
-    }
-  };
+  const AI_COOLDOWN = 12000;
 
   const updateCommentary = useCallback(async (eventDescription: string, forceAi = false) => {
     const now = Date.now();
@@ -314,29 +282,6 @@ const App: React.FC = () => {
            }
          }}>
       
-      {!hasApiKey && (
-        <div className="absolute inset-0 z-[100] flex items-center justify-center bg-black/90 backdrop-blur-xl">
-          <div className="bg-[#1a3318] p-12 rounded-[2rem] border border-white/10 text-center max-w-lg shadow-2xl">
-            <h2 className="text-4xl font-black mb-6 tracking-tight">EXPERIENCIA TÁCTICA MEJORADA</h2>
-            <p className="text-white/70 mb-10 text-lg">Para activar la narración dinámica por IA de Gemini, es necesario configurar una API Key de Google Studio.</p>
-            <button 
-              onClick={handleSelectKey}
-              className="w-full py-5 bg-blue-600 rounded-2xl font-black text-xl hover:bg-blue-500 hover:scale-[1.02] active:scale-[0.98] transition-all shadow-[0_0_40px_rgba(37,99,235,0.4)]"
-            >
-              CONFIGURAR API KEY
-            </button>
-            <a 
-              href="https://ai.google.dev/gemini-api/docs/billing" 
-              target="_blank" 
-              rel="noopener noreferrer"
-              className="block mt-6 text-sm text-white/40 hover:text-white/80 transition-colors underline"
-            >
-              Documentación sobre facturación y cuotas
-            </a>
-          </div>
-        </div>
-      )}
-
       <div className="bg-gradient-to-b from-black to-transparent p-6 flex justify-between items-start z-10">
          <div className="flex gap-4 items-center bg-black/80 p-4 rounded-xl border border-white/10 backdrop-blur-md shadow-2xl">
             <div className="text-center px-4">
