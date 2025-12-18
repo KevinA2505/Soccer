@@ -1,0 +1,5 @@
+{
+  "name": "Tactical Soccer Sim 2D",
+  "description": "A turn-based tactical football simulator with real-time movement and AI state machines. Features 2D top-down visuals, formation-based positioning, and strategic decision-making phases.",
+  "requestFramePermissions": []
+}
