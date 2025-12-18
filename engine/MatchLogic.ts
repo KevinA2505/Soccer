@@ -61,15 +61,70 @@ export const getPointToLineDistance = (start: Position, end: Position, pt: Posit
   return Math.sqrt((pt.x - (start.x + t * (end.x - start.x)))**2 + (pt.y - (start.y + t * (end.y - start.y)))**2);
 };
 
+const clamp = (val: number, min: number, max: number) => Math.max(min, Math.min(max, val));
+
+const evaluatePassSafety = (start: Position, target: Position, opponents: Player[]) => {
+  const dx = target.x - start.x;
+  const dy = target.y - start.y;
+  const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+  const dir = { x: dx / dist, y: dy / dist };
+
+  let laneRisk = 0;
+  opponents.forEach(opp => {
+    const toOpp = { x: opp.position.x - start.x, y: opp.position.y - start.y };
+    const projection = toOpp.x * dir.x + toOpp.y * dir.y;
+    if (projection < 0 || projection > dist) return;
+
+    const closestPoint = { x: start.x + dir.x * projection, y: start.y + dir.y * projection };
+    const lateralDist = Math.sqrt((opp.position.x - closestPoint.x) ** 2 + (opp.position.y - closestPoint.y) ** 2);
+    const interceptThreshold = Math.max(3, 1.8 + dist * 0.04);
+
+    if (lateralDist < interceptThreshold) {
+      laneRisk += (interceptThreshold - lateralDist) * 12 + opp.stats.defense * 0.2;
+    }
+  });
+
+  return { isSafe: laneRisk < 22, laneRisk };
+};
+
+const shotTargetsForSide = (goalX: number, playerY: number): Position[] => {
+  const farPostOffset = playerY < 40 ? 7 : -7;
+  const nearPostOffset = playerY < 40 ? -4 : 4;
+  const centerLean = playerY < 40 ? 2.5 : -2.5;
+  return [
+    { x: goalX, y: clamp(40 + farPostOffset, 30, 50) },
+    { x: goalX, y: clamp(40 + nearPostOffset, 32, 48) },
+    { x: goalX, y: clamp(40 + centerLean, 33, 47) }
+  ];
+};
+
 export const getAIDecision = (aiPlayer: Player, players: Player[], ball: Ball) => {
-  const goalPos = { x: 0, y: 40 };
-  const distToGoal = Math.sqrt((aiPlayer.position.x - goalPos.x)**2 + (aiPlayer.position.y - goalPos.y)**2);
+  const opponentGoal = { x: aiPlayer.side === TeamSide.HOME ? 120 : 0, y: 40 };
+  const ownGoal = { x: aiPlayer.side === TeamSide.HOME ? 0 : 120, y: 40 };
+  const forwardDir = aiPlayer.side === TeamSide.HOME ? 1 : -1;
+  const distToGoal = Math.sqrt((aiPlayer.position.x - opponentGoal.x)**2 + (aiPlayer.position.y - opponentGoal.y)**2);
+  const distToOwnGoal = Math.sqrt((aiPlayer.position.x - ownGoal.x)**2 + (aiPlayer.position.y - ownGoal.y)**2);
+  const opponents = players.filter(p => p.side !== aiPlayer.side);
+  const closestOppDist = Math.min(...opponents.map(o => Math.sqrt((o.position.x - aiPlayer.position.x)**2 + (o.position.y - aiPlayer.position.y)**2)), 50);
+
+  if ((aiPlayer.role === PlayerRole.DEF || aiPlayer.role === PlayerRole.GK) && distToOwnGoal < 32 && closestOppDist < 8) {
+    const clearanceTarget = { 
+      x: clamp(aiPlayer.position.x + forwardDir * 24, 4, 116), 
+      y: clamp(aiPlayer.position.y + (aiPlayer.position.y < 40 ? -14 : 14), 4, 76) 
+    };
+    return { type: 'pass', target: clearanceTarget, power: 88 };
+  }
 
   if (distToGoal < 35) {
-    const corners = [32, 48];
-    const targetY = corners[Math.floor(Math.random() * corners.length)];
-    const shootProb = calculateProbability('shoot', aiPlayer, { x: 0, y: targetY }, players, ball, 90);
-    if (shootProb > 25) return { type: 'shoot', target: { x: 0, y: targetY }, power: 88 + Math.random() * 8 };
+    const shotCandidates = shotTargetsForSide(opponentGoal.x, aiPlayer.position.y).map(target => ({
+      target,
+      prob: calculateProbability('shoot', aiPlayer, target, players, ball, 92)
+    }));
+    const bestShot = shotCandidates.sort((a, b) => b.prob - a.prob)[0];
+    const roleShotBonus = aiPlayer.role === PlayerRole.FWD ? -6 : aiPlayer.role === PlayerRole.MID ? 0 : 8;
+    if (bestShot && bestShot.prob > 22 + roleShotBonus) {
+      return { type: 'shoot', target: bestShot.target, power: 88 + Math.random() * 8 };
+    }
   }
 
   const teammates = players.filter(p => p.side === aiPlayer.side && p.id !== aiPlayer.id);
@@ -77,22 +132,44 @@ export const getAIDecision = (aiPlayer: Player, players: Player[], ball: Ball) =
     const dist = Math.sqrt((t.position.x - aiPlayer.position.x)**2 + (t.position.y - aiPlayer.position.y)**2);
     const optimalPower = Math.min(100, dist * 1.3 + 15);
     const prob = calculateProbability('pass', aiPlayer, t.position, players, ball, optimalPower);
-    const progression = aiPlayer.position.x - t.position.x; 
-    const score = (prob * 0.7) + (progression * 3.0);
-    return { t, score, prob, power: optimalPower };
+    const { isSafe, laneRisk } = evaluatePassSafety(aiPlayer.position, t.position, opponents);
+    const progression = (t.position.x - aiPlayer.position.x) * forwardDir;
+    const switchValue = Math.abs(t.position.y - aiPlayer.position.y);
+    const wallOption = dist < 18 && Math.abs(t.position.y - aiPlayer.position.y) < 12;
+
+    let roleScore = 0;
+    switch (aiPlayer.role) {
+      case PlayerRole.DEF:
+      case PlayerRole.GK:
+        roleScore = prob * 0.9 + (isSafe ? 18 : -8) + Math.min(-progression * 0.8, 12);
+        break;
+      case PlayerRole.MID:
+        roleScore = prob * 0.65 + progression * 4.5 + switchValue * 0.7 + (isSafe ? 10 : 0);
+        break;
+      case PlayerRole.FWD:
+        roleScore = prob * 0.55 + progression * 3.6 + (wallOption ? 14 : 0) + (distToGoal < 42 ? 6 : 0);
+        break;
+      default:
+        roleScore = prob * 0.7 + progression * 2.4;
+    }
+
+    const safetyAdjustment = isSafe ? 8 : -laneRisk * 0.4;
+    const score = roleScore + safetyAdjustment;
+    return { t, score, prob, power: optimalPower, isSafe };
   });
 
-  const bestPass = passOptions.filter(o => o.prob > 40).sort((a, b) => b.score - a.score)[0];
-  if (bestPass && bestPass.score > 20) return { type: 'pass', target: bestPass.t.position, power: bestPass.power };
+  const bestPass = passOptions
+    .filter(o => (o.prob > 32 && o.isSafe) || o.score > 25)
+    .sort((a, b) => b.score - a.score)[0];
+  if (bestPass && bestPass.score > 18) return { type: 'pass', target: bestPass.t.position, power: bestPass.power };
 
-  const opponents = players.filter(p => p.side !== aiPlayer.side);
   let driftY = aiPlayer.position.y + (Math.random() > 0.5 ? 10 : -10);
   const blocker = opponents.find(o => Math.sqrt((o.position.x - aiPlayer.position.x)**2 + (o.position.y - aiPlayer.position.y)**2) < 8);
   if (blocker) driftY = blocker.position.y > aiPlayer.position.y ? aiPlayer.position.y - 15 : aiPlayer.position.y + 15;
 
   return { 
     type: 'dribble', 
-    target: { x: Math.max(10, aiPlayer.position.x - 12), y: Math.max(5, Math.min(75, driftY)) }, 
+    target: { x: clamp(aiPlayer.position.x + (12 * forwardDir), 2, 118), y: Math.max(5, Math.min(75, driftY)) }, 
     power: 45 
   };
 };
