@@ -273,8 +273,38 @@ const App: React.FC = () => {
 
         let nOwnerId = prev.ball.ownerId;
         if (!nOwnerId) {
-          const nearest = nextPlayers.find(p => Math.sqrt((p.position.x-nbPos.x)**2 + (p.position.y-nbPos.y)**2) < 2.5 && p.actionCooldown === 0);
-          if (nearest) nOwnerId = nearest.id;
+          const catchRadius = PLAYER_RADIUS * 3;
+          const candidates = nextPlayers
+            .map(p => ({
+              player: p,
+              dist: Math.sqrt((p.position.x - nbPos.x) ** 2 + (p.position.y - nbPos.y) ** 2)
+            }))
+            .filter(({ dist }) => dist < catchRadius);
+
+          if (candidates.length > 0) {
+            const defensiveHalf = (side: TeamSide) => side === TeamSide.HOME ? nbPos.x < 60 : nbPos.x > 60;
+            const prioritized = candidates
+              .map(({ player, dist }) => {
+                const distanceScore = Math.max(0, catchRadius - dist) / catchRadius;
+                const cooldownPenalty = Math.max(0.25, 1 - player.actionCooldown * 0.025);
+                const isDefensiveRole = player.role === PlayerRole.DEF || player.role === PlayerRole.GK;
+                const isOffensiveRole = player.role === PlayerRole.FWD;
+                const roleBoost =
+                  defensiveHalf(player.side) && isDefensiveRole ? 1.2 :
+                  (!defensiveHalf(player.side) && isOffensiveRole ? 1.15 : 1);
+                const priorityScore = distanceScore * roleBoost;
+                return { player, priorityScore, distanceScore, cooldownPenalty };
+              })
+              .sort((a, b) => b.priorityScore - a.priorityScore || a.distanceScore - b.distanceScore);
+
+            for (const candidate of prioritized) {
+              const controlChance = Math.min(0.98, candidate.priorityScore * candidate.cooldownPenalty + 0.1);
+              if (Math.random() < controlChance) {
+                nOwnerId = candidate.player.id;
+                break;
+              }
+            }
+          }
         } else {
           const o = nextPlayers.find(p => p.id === nOwnerId);
           if (o) { nbPos = { ...o.position }; nbVel = { x: 0, y: 0 }; }
